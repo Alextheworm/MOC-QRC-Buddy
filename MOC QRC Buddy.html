@@ -22,41 +22,35 @@
     </style>
 </head>
 <body>
-
 <div class="container">
     <h1>MOC QRC Buddy V1.1</h1>
     
     <h2>Step 1: Upload The QRC!</h2>
-    <p>Select the Quick Response Checklist file in .docx or .pdf format. The app will automatically extract the text and generate a prompt based on proven examples.</p>
+    <p>Select the Quick Response Checklist file in .docx or .pdf format. The app will automatically extract the text <strong>and form field values</strong> and generate a prompt based on proven examples.</p>
     <input type="file" id="doc-picker" accept=".docx,.pdf">
     <span id="file-chosen">No file chosen</span>
-
     <hr style="margin: 2rem 0;">
-
     <h2>Step 2: Copy and Paste to GenAI</h2>
     <p>Use the buttons below to copy your generated prompt and then open GenAI.mil.</p>
     <textarea id="outputText" readonly placeholder="The prompt with the document's text will appear here..."></textarea>
-    <button onclick="copyToClipboard()">Copy to Clipboard</button>
+    <button id="copyBtn">Copy to Clipboard</button>
     <a href="https://genai.mil" target="_blank" rel="noopener noreferrer" class="link-button">Open GenAI.mil</a>
 </div>
-
 <script>
     // Set the workerSrc for pdf.js
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js';
 
     document.getElementById('doc-picker').addEventListener('change', handleFileSelect, false);
+    document.getElementById('copyBtn').addEventListener('click', copyToClipboard);
 
     function handleFileSelect(event) {
         const file = event.target.files[0];
         if (!file) return;
-
         document.getElementById('file-chosen').textContent = file.name;
         const reader = new FileReader();
-
         reader.onload = function(e) {
             const fileExtension = file.name.split('.').pop().toLowerCase();
             const arrayBuffer = e.target.result;
-
             if (fileExtension === 'docx') {
                 handleDocx(arrayBuffer);
             } else if (fileExtension === 'pdf') {
@@ -77,29 +71,53 @@
             });
     }
 
-    function handlePdf(arrayBuffer) {
-        pdfjsLib.getDocument({ data: arrayBuffer }).promise.then(pdf => {
+    // Extracts BOTH page text AND form field values
+    async function handlePdf(arrayBuffer) {
+        try {
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
             let fullText = '';
-            const numPages = pdf.numPages;
-            let pagesProcessed = 0;
+            const formFields = [];
 
-            for (let i = 1; i <= numPages; i++) {
-                pdf.getPage(i).then(page => {
-                    page.getTextContent().then(textContent => {
-                        const pageText = textContent.items.map(item => item.str).join(' ');
-                        fullText += pageText + '\n\n';
-                        pagesProcessed++;
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                const page = await pdf.getPage(pageNum);
 
-                        if (pagesProcessed === numPages) {
-                            generatePrompt(fullText);
+                // 1. Normal text content
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map(item => item.str).join(' ');
+                if (pageText.trim()) {
+                    fullText += pageText + '\n\n';
+                }
+
+                // 2. Form fields
+                const annotations = await page.getAnnotations();
+                for (const annot of annotations) {
+                    if (annot.subtype === 'Widget' && annot.fieldName) {
+                        let value = annot.fieldValue;
+
+                        if (Array.isArray(value)) {
+                            value = value.join(', ');
                         }
-                    });
-                });
+                        if (value === undefined || value === null || value === '') {
+                            value = annot.buttonValue || annot.fieldValue || 'Off';
+                        }
+
+                        formFields.push(`${annot.fieldName}: ${value}`);
+                    }
+                }
             }
-        }).catch(err => {
+
+            if (formFields.length > 0) {
+                fullText += '\n\n--- EXTRACTED FORM FIELDS ---\n';
+                fullText += formFields.join('\n');
+            } else {
+                fullText += '\n\n(No fillable form fields were found in this PDF.)';
+            }
+
+            generatePrompt(fullText);
+        } catch (err) {
             console.error("PDF.js error:", err);
-            document.getElementById('outputText').value = "Error: Could not read the .pdf document.";
-        });
+            document.getElementById('outputText').value = "Error: Could not read the .pdf document.\n\n" + err.message;
+        }
     }
 
     function generatePrompt(documentText) {
@@ -161,21 +179,48 @@ DOCUMENT TEXT TO PROCESS:
         document.getElementById('outputText').value = combinedText;
     }
 
+    // Robust copy that works on file:// and https://
     function copyToClipboard() {
         const outputField = document.getElementById('outputText');
-        if (outputField.value) {
+        if (!outputField.value) {
+            alert('Nothing to copy. Please upload a document first.');
+            return;
+        }
+
+        // Try modern Clipboard API first (works on https)
+        if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(outputField.value)
                 .then(() => alert('Prompt copied to clipboard!'))
                 .catch(err => {
-                    console.error('Failed to copy text: ', err);
-                    alert('Could not copy text. Please do it manually.');
+                    console.warn('Clipboard API blocked, using fallback', err);
+                    fallbackCopy(outputField);
                 });
         } else {
-            alert('Nothing to copy. Please upload a document first.');
+            // file:// or older browsers → always use fallback
+            fallbackCopy(outputField);
         }
     }
-</script>
 
+    function fallbackCopy(textarea) {
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, 999999); // mobile support
+
+        try {
+            const successful = document.execCommand('copy');
+            if (successful) {
+                alert('Prompt copied to clipboard!');
+            } else {
+                alert('Could not copy automatically.\nPlease select the text and press Ctrl+C (or Cmd+C).');
+            }
+        } catch (err) {
+            console.error('Fallback copy failed:', err);
+            alert('Could not copy automatically.\nPlease select the text and press Ctrl+C (or Cmd+C).');
+        }
+
+        // Deselect so the blue highlight disappears
+        window.getSelection().removeAllRanges();
+    }
+</script>
 </body>
 </html>
-
