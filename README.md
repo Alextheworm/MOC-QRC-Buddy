@@ -6,4 +6,6 @@ How To Use:
 1. DownLoad the zip File
 2. Move the .HTML File to you desk top
 3. Open File and add a qrc, the system will automaticly pull all needed data from the file and generat stuf for you to copy and paste in gen AI
-4. it will give you things for a local tracker and and email distro 
+4. it will give you things for a local tracker and and email distro
+5. always read what the AI give you.
+
